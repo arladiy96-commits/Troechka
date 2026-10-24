@@ -56,6 +56,7 @@ class OrderAccessibilityService : AccessibilityService() {
     private var scrollPolls = 0
     private var incompleteObservations = 0
     private var alternateDirection = false
+    private var preciseScan = false
     private var lastDiagnosticAt = 0L
     private var lastNodeCount = 0
     private var lastTextCount = 0
@@ -81,15 +82,16 @@ class OrderAccessibilityService : AccessibilityService() {
         }
     }
 
-    fun startScan() {
-        known.clear()
+    fun startScan(accurate: Boolean = false) {
+        if (!accurate) known.clear()
+        preciseScan = accurate
         selected = null
         phase = Phase.RESET_SCAN
         startedAt = SystemClock.elapsedRealtime()
         currentPages = 0
         incompleteObservations = 0
         resetScrollTracking()
-        publish("Сканирование запущено. Открой вкладку «Свободные».")
+        publish(if (accurate) "Точная допроверка: небольшие прокрутки с перекрытием." else "Быстрое сканирование списка.")
         schedule(160)
     }
 
@@ -319,23 +321,26 @@ class OrderAccessibilityService : AccessibilityService() {
         val node = view.scrollNode ?: return false
         val action = if (backwards) AccessibilityNodeInfo.ACTION_SCROLL_BACKWARD
                      else AccessibilityNodeInfo.ACTION_SCROLL_FORWARD
-        if (node.performAction(action)) return true
+        val precise = preciseScan && phase == Phase.SCAN && !backwards
+        if (!precise && node.performAction(action)) return true
 
-        // Fallback only for scrollable LIST, never inside a detail screen.
+        // Precise scan uses overlapping short swipes so a partially visible
+        // address can be read fully on a later frame. Never swipe a detail.
+
         if (view.detail || view.acceptTextVisible || view.cards.isEmpty()) return false
         val rect = Rect()
         node.getBoundsInScreen(rect)
         if (rect.height() < 320 || rect.width() < 200) return false
         val x = rect.centerX().toFloat()
-        val high = (rect.top + rect.height() * 0.30f)
-        val low = (rect.top + rect.height() * 0.75f)
+        val high = (rect.top + rect.height() * if (precise) 0.41f else 0.30f)
+        val low = (rect.top + rect.height() * if (precise) 0.68f else 0.75f)
         val path = Path().apply {
             moveTo(x, if (backwards) high else low)
             lineTo(x, if (backwards) low else high)
         }
         return dispatchGesture(
             GestureDescription.Builder().addStroke(
-                GestureDescription.StrokeDescription(path, 0, 330)
+                GestureDescription.StrokeDescription(path, 0, if (precise) 195L else 260L)
             ).build(), null, null
         )
     }
