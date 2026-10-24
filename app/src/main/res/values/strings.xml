@@ -1,0 +1,6 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="app_name">Троечка Помощник</string>
+    <string name="accessibility_name">Троечка — диагностика списка</string>
+    <string name="accessibility_description">Диагностика элементов списка в Троечка Driver. Не принимает заказы и не отправляет данные в интернет.</string>
+</resources>
