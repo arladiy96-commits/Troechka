@@ -50,7 +50,7 @@ class MainActivity : Activity() {
         viewport.addView(root)
         root.addView(label("TROECHKA / DRIVER TOOLS", 12f, accent, true))
         root.addView(label("Помощник", 31f, Color.WHITE, true))
-        root.addView(label("Сканер списка · v0.2  /  без автопринятия", 13f, muted, false))
+        root.addView(label("Сканер списка · v0.3  /  ускоренный поиск", 13f, muted, false))
         gap(root, 20)
 
         statusText = label("", 16f, Color.WHITE, false)
@@ -63,6 +63,15 @@ class MainActivity : Activity() {
                 statusText.text = "Сначала включи специальный доступ"
             } else {
                 service.startScan()
+                launchDriver()
+            }
+        }
+        button(root, "Точная допроверка пропусков", false) {
+            val service = OrderAccessibilityService.live
+            if (service == null) {
+                statusText.text = "Сначала включи специальный доступ"
+            } else {
+                service.startScan(accurate = true)
                 launchDriver()
             }
         }
@@ -134,8 +143,9 @@ class MainActivity : Activity() {
         gap(root, 14)
         root.addView(label(
             "Как пользоваться: включи спецдоступ и в «Троечке» открой «Свободные». " +
-            "Нажми «Сканировать» — помощник вернётся в Троечку, дойдёт до начала списка " +
-            "и прокрутит его вниз. Потом вернись сюда и выбери нужный заказ.\n\n" +
+            "Сначала запусти быстрое сканирование. Если некоторые заказы пропущены, " +
+            "выбери «Точная допроверка»: она листает меньшими шагами и дополняет найденное. " +
+            "Поиск карточки начинается с текущей позиции, без возврата в начало.\n\n" +
             "Поиск открывает только карточку. Свайп «Принять заказ» НЕ выполняется. " +
             "Адреса остаются в оперативной памяти телефона, доступа к интернету у Помощника нет.",
             13f, muted, false
@@ -170,6 +180,7 @@ class MainActivity : Activity() {
             "Режим: " + model.phase + "\n" +
             "Пройдено экранов: " + model.pages + "\n" +
             "В памяти заказов: " + model.orders.size + "\n" +
+            "Неполных чтений: " + model.incompleteObservations + "\n" +
             "Время: " + String.format(Locale.US, "%.1f", model.elapsedMs / 1000.0) + " с\n" +
             "Узлов интерфейса: " + model.lastNodeCount + "\n" +
             "Текстовых узлов: " + model.lastTextCount + "\n" +
