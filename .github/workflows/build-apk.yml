@@ -1,4 +1,4 @@
-name: Build diagnostic APK
+name: Build Troechka Helper APK
 
 on:
   push:
@@ -38,6 +38,6 @@ jobs:
       - name: Upload APK
         uses: actions/upload-artifact@v4
         with:
-          name: TroechkaHelper-Diagnostic
+          name: TroechkaHelper-v0.2
           path: app/build/outputs/apk/debug/app-debug.apk
           if-no-files-found: error
