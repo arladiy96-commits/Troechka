@@ -38,7 +38,7 @@ object OrderParser {
     private val fareRegex = Regex("""(\d[\d \u00a0]{0,9})[,.](\d\d)\s*(?:тенге|₸)""", RegexOption.IGNORE_CASE)
     private val distanceRegex = Regex("""(\d+(?:[,.]\d+)?)\s*км""", RegexOption.IGNORE_CASE)
     private val addressRegex = Regex(
-        """(?:\bул\b|\bул\.|\bпр\.|\bпроспект\b|\bмкр\b|\bмикрорайон\b|\bпер\.|\bпереулок\b|\bшоссе\b|\bрайон\b|\bпосёлок\b|\bсело\b|\bплощадь\b)""",
+        """(?:\bул\b|\bулица\b|\bул\.|\bпр\.|\bпроспект\b|\bмкр\b|\bмикрорайон\b|\bпер\.|\bпереулок\b|\bшоссе\b|\bрайон\b|\bпосёлок\b|\bсело\b|\bплощадь\b|\bбульвар\b|\bпроезд\b|\bнабережная\b|\bтракт\b)""",
         RegexOption.IGNORE_CASE
     )
     private val orderIdRegex = Regex("""\b\d{5,10}\b""")
@@ -122,7 +122,6 @@ object OrderParser {
 
             val addresses = section.map { it.text.replace(Regex("""\s+"""), " ").trim() }
                 .filter { addressRegex.containsMatchIn(it) }
-                .distinct()
             val pickup = addresses.getOrNull(0).orEmpty()
             val destination = addresses.getOrNull(1).orEmpty()
             val distances = section.mapNotNull { p ->
