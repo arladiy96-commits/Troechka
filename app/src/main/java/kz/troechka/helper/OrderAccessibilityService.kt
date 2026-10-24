@@ -26,7 +26,8 @@ class OrderAccessibilityService : AccessibilityService() {
         val sliderVisible: Boolean = false,
         val lastNodeCount: Int = 0,
         val lastTextCount: Int = 0,
-        val lastScrollableCount: Int = 0
+        val lastScrollableCount: Int = 0,
+        val incompleteObservations: Int = 0
     )
 
     companion object {
@@ -50,6 +51,11 @@ class OrderAccessibilityService : AccessibilityService() {
     private var waitingDetailChecks = 0
     private val handler = Handler(Looper.getMainLooper())
     private var scheduled = false
+    private var waitingForScroll = false
+    private var scrollSnapshot = ""
+    private var scrollPolls = 0
+    private var incompleteObservations = 0
+    private var alternateDirection = false
     private var lastDiagnosticAt = 0L
     private var lastNodeCount = 0
     private var lastTextCount = 0
@@ -81,9 +87,10 @@ class OrderAccessibilityService : AccessibilityService() {
         phase = Phase.RESET_SCAN
         startedAt = SystemClock.elapsedRealtime()
         currentPages = 0
+        incompleteObservations = 0
         resetScrollTracking()
         publish("Сканирование запущено. Открой вкладку «Свободные».")
-        schedule(500)
+        schedule(160)
     }
 
     fun findAndOpen(key: String): Boolean {
@@ -93,11 +100,13 @@ class OrderAccessibilityService : AccessibilityService() {
             return false
         }
         selected = order
-        phase = Phase.RESET_FIND
+        // Searching from the currently displayed page is much faster than resetting.
+        phase = Phase.FIND
         startedAt = SystemClock.elapsedRealtime()
+        alternateDirection = false
         resetScrollTracking()
         publish("Поиск выбранного заказа. Открой вкладку «Свободные».")
-        schedule(500)
+        schedule(180)
         return true
     }
 
@@ -112,6 +121,7 @@ class OrderAccessibilityService : AccessibilityService() {
         unchanged = 0
         lastFingerprint = ""
         waitingDetailChecks = 0
+        waitingForScroll = false
     }
 
     private fun schedule(delay: Long) {
@@ -133,6 +143,15 @@ class OrderAccessibilityService : AccessibilityService() {
         }
         val view = OrderParser.inspect(root)
         updateNumericalDiagnostics(view)
+
+        // The view tree immediately after ACTION_SCROLL may still be the old one.
+        if (waitingForScroll) {
+            if (screenFingerprint(view) == scrollSnapshot && scrollPolls++ < 4) {
+                schedule(100)
+                return
+            }
+            waitingForScroll = false
+        }
 
         if (phase == Phase.WAIT_DETAIL) {
             waitingDetailChecks++
@@ -176,11 +195,11 @@ class OrderAccessibilityService : AccessibilityService() {
             return
         }
 
-        val fingerprint = view.cards.joinToString("#") { it.record.key }
-        if (fingerprint == lastFingerprint) unchanged++
+        val frame = screenFingerprint(view)
+        if (frame == lastFingerprint) unchanged++
         else {
             unchanged = 0
-            lastFingerprint = fingerprint
+            lastFingerprint = frame
         }
 
         when (phase) {
@@ -190,19 +209,20 @@ class OrderAccessibilityService : AccessibilityService() {
                     resetScrollTracking()
                     publish("Дошёл до начала списка. " +
                         if (phase == Phase.SCAN) "Читаю заказы…" else "Ищу выбранный заказ…")
-                    schedule(300)
-                } else if (scroll(view, backwards = true)) {
+                    schedule(120)
+                } else if (scrollAndWait(view, backwards = true)) {
                     steps++
                     publish("Прокручиваю к началу списка…")
-                    schedule(500)
+                    schedule(160)
                 } else {
                     phase = if (phase == Phase.RESET_SCAN) Phase.SCAN else Phase.FIND
                     resetScrollTracking()
-                    schedule(300)
+                    schedule(120)
                 }
             }
             Phase.SCAN -> {
                 currentPages++
+                incompleteObservations += view.cards.count { !it.record.complete }
                 for (item in view.cards) {
                     if (item.record.complete) {
                         known[item.record.key] = item.record
@@ -212,10 +232,10 @@ class OrderAccessibilityService : AccessibilityService() {
                     phase = Phase.IDLE
                     publish("Готово. Найдено полных карточек: " + known.size +
                         ". Вернись в Помощник и выбери заказ.")
-                } else if (scroll(view, backwards = false)) {
+                } else if (scrollAndWait(view, backwards = false)) {
                     steps++
                     publish("Сканирую список: найдено " + known.size + " карточек…")
-                    schedule(500)
+                    schedule(160)
                 } else {
                     phase = Phase.IDLE
                     publish("Сканирование завершено. Полных карточек: " + known.size)
@@ -233,30 +253,67 @@ class OrderAccessibilityService : AccessibilityService() {
                 if (matches.size == 1) {
                     if (openVisibleCard(matches.single(), root)) {
                         phase = Phase.WAIT_DETAIL
-                        publish("Открываю совпадающую карточку. Принятие отключено.")
-                        schedule(750)
+                        publish("Открываю выбранную карточку. Принятие отключено.")
+                        schedule(300)
                     } else {
                         phase = Phase.IDLE
-                        publish("Не получилось нажать на карточку. Ничего не принято.")
+                        publish("Карточка не открылась. Ничего не принято.")
                     }
                 } else if (matches.size > 1) {
                     phase = Phase.IDLE
-                    publish("Найдено несколько одинаковых карточек. Ничего не открываю.")
-                } else if (unchanged >= 2 || steps >= 40) {
-                    phase = Phase.IDLE
-                    publish("Заказ больше не найден (возможно, исчез из списка).")
-                } else if (scroll(view, backwards = false)) {
-                    steps++
-                    publish("Ищу заказ среди остальных строк…")
-                    schedule(500)
+                    publish("Несколько одинаковых карточек. Ничего не открываю.")
                 } else {
-                    phase = Phase.IDLE
-                    publish("Заказ не найден. Вероятно, список обновился.")
+                    val orderIndexes = known.keys.toList()
+                    val wanted = orderIndexes.indexOf(target.key)
+                    val nearby = view.cards.map { orderIndexes.indexOf(it.record.key) }.filter { it >= 0 }
+                    val reverse = when {
+                        nearby.isEmpty() -> true
+                        wanted < nearby.minOrNull()!! -> true
+                        wanted > nearby.maxOrNull()!! -> false
+                        else -> false
+                    }
+                    val backwards = if (alternateDirection) !reverse else reverse
+                    if (unchanged >= 2 || steps >= 40) {
+                        if (!alternateDirection && steps < 40) {
+                            alternateDirection = true
+                            unchanged = 0
+                            lastFingerprint = ""
+                            if (scrollAndWait(view, !reverse)) {
+                                steps++
+                                schedule(160)
+                            } else {
+                                phase = Phase.IDLE
+                                publish("Заказ исчез или список изменился.")
+                            }
+                        } else {
+                            phase = Phase.IDLE
+                            publish("Заказ не найден в актуальном списке.")
+                        }
+                    } else if (scrollAndWait(view, backwards)) {
+                        steps++
+                        publish("Ищу подходящую карточку " + if (backwards) "выше…" else "ниже…")
+                        schedule(160)
+                    } else {
+                        phase = Phase.IDLE
+                        publish("Прокрутка закончилась. Заказ не найден.")
+                    }
                 }
             }
             else -> Unit
         }
     }
+
+    private fun scrollAndWait(view: ScanView, backwards: Boolean): Boolean {
+        val original = screenFingerprint(view)
+        if (!scroll(view, backwards)) return false
+        scrollSnapshot = original
+        waitingForScroll = true
+        scrollPolls = 0
+        return true
+    }
+
+    private fun screenFingerprint(view: ScanView): String =
+        view.cards.joinToString("#") { it.record.key + "@" + it.priceBounds.top }
 
     private fun scroll(view: ScanView, backwards: Boolean): Boolean {
         val node = view.scrollNode ?: return false
@@ -350,7 +407,8 @@ class OrderAccessibilityService : AccessibilityService() {
             elapsedMs = if (startedAt == 0L) 0 else SystemClock.elapsedRealtime() - startedAt,
             lastDetailId = detailId, sliderVisible = slider,
             lastNodeCount = lastNodeCount, lastTextCount = lastTextCount,
-            lastScrollableCount = lastScrollCount
+            lastScrollableCount = lastScrollCount,
+            incompleteObservations = incompleteObservations
         )
     }
 
