@@ -48,6 +48,7 @@ object OrderParser {
         queue.add(root)
         val pieces = mutableListOf<Piece>()
         val scrollables = mutableListOf<AccessibilityNodeInfo>()
+        val rootBounds = Rect().also { root.getBoundsInScreen(it) }
         val seen = HashSet<String>()
         var count = 0
         var clickables = 0
@@ -58,7 +59,10 @@ object OrderParser {
             if (node.isScrollable) scrollables.add(node)
             val rect = Rect()
             node.getBoundsInScreen(rect)
-            if (rect.width() > 0 && rect.height() > 0) {
+            // Ignore off-screen/virtual rows. A partially visible card will be retried
+            // on the next overlapping scroll step.
+            if (rect.width() > 0 && rect.height() > 0 &&
+                Rect.intersects(rect, rootBounds)) {
                 val value = (node.text?.toString()?.takeIf { it.isNotBlank() }
                     ?: node.contentDescription?.toString().orEmpty()).trim()
                 if (value.isNotBlank()) {
@@ -105,8 +109,15 @@ object OrderParser {
             val nextY = prices.getOrNull(index + 1)?.first?.bounds?.centerY()
             val from = previousY?.let { (it + y) / 2 } ?: (y - 230)
             val until = nextY?.let { (it + y) / 2 } ?: (y + 450)
-            val section = pieces.filter { p ->
-                p.bounds.centerY() >= from && p.bounds.centerY() < until
+            // Prefer the actual card container if accessibility exposes one. Pixel
+            // midpoints fail on cards with long wrapped addresses.
+            val parentBounds = findCardBounds(pricePiece.node, pricePiece.bounds, rootBounds, prices, pieces)
+            val section = if (parentBounds != null) {
+                pieces.filter { parentBounds.contains(it.bounds.centerX(), it.bounds.centerY()) }
+            } else {
+                pieces.filter { p ->
+                    p.bounds.centerY() >= from && p.bounds.centerY() < until
+                }
             }.sortedWith(compareBy<Piece> { it.bounds.top }.thenBy { it.bounds.left })
 
             val addresses = section.map { it.text.replace(Regex("""\s+"""), " ").trim() }
@@ -128,6 +139,40 @@ object OrderParser {
         }
         return ScanView(visible, scroll, false, false, null,
             pieces.size, clickables, scrollables.size, count)
+    }
+
+    private fun findCardBounds(
+        priceNode: AccessibilityNodeInfo,
+        priceRect: Rect,
+        window: Rect,
+        prices: List<Pair<Piece, Int>>,
+        pieces: List<Piece>
+    ): Rect? {
+        var ancestor: AccessibilityNodeInfo? = priceNode.parent
+        var depth = 0
+        var best: Rect? = null
+        while (ancestor != null && depth++ < 9) {
+            val box = Rect().also { ancestor.getBoundsInScreen(it) }
+            val height = box.height()
+            if (height > priceRect.height() * 2 &&
+                height < window.height() * 0.72 &&
+                box.width() > priceRect.width() * 1.5 &&
+                box.contains(priceRect.centerX(), priceRect.centerY())) {
+                val priceCount = prices.count {
+                    box.contains(it.first.bounds.centerX(), it.first.bounds.centerY())
+                }
+                val addressCount = pieces.count {
+                    box.contains(it.bounds.centerX(), it.bounds.centerY()) &&
+                    addressRegex.containsMatchIn(it.text)
+                }
+                if (priceCount == 1 && addressCount >= 2) {
+                    best = box
+                    break
+                }
+            }
+            ancestor = ancestor.parent
+        }
+        return best
     }
 
     private fun normalize(value: String) =
