@@ -50,7 +50,9 @@ class OrderAccessibilityService : AccessibilityService() {
     private var selected: OrderRecord? = null
     private var waitingDetailChecks = 0
     private val handler = Handler(Looper.getMainLooper())
-    private var scheduled = false
+    private var pendingTick: Runnable? = null
+    private var nextTickAt = Long.MAX_VALUE
+    private val scanOrder = linkedSetOf<String>()
     private var waitingForScroll = false
     private var scrollSnapshot = ""
     private var scrollPolls = 0
@@ -84,6 +86,7 @@ class OrderAccessibilityService : AccessibilityService() {
 
     fun startScan(accurate: Boolean = false) {
         if (!accurate) known.clear()
+        scanOrder.clear()
         preciseScan = accurate
         selected = null
         phase = Phase.RESET_SCAN
@@ -114,6 +117,10 @@ class OrderAccessibilityService : AccessibilityService() {
 
     fun cancel() {
         phase = Phase.IDLE
+        pendingTick?.let { handler.removeCallbacks(it) }
+        pendingTick = null
+        nextTickAt = Long.MAX_VALUE
+        waitingForScroll = false
         selected = null
         publish("Остановлено. Результаты сканирования сохранены до закрытия процесса.")
     }
@@ -127,13 +134,32 @@ class OrderAccessibilityService : AccessibilityService() {
     }
 
     private fun schedule(delay: Long) {
-        if (scheduled) return
-        scheduled = true
-        handler.postDelayed({
-            scheduled = false
+        val due = SystemClock.uptimeMillis() + delay
+        if (pendingTick != null && due >= nextTickAt) return
+        pendingTick?.let { handler.removeCallbacks(it) }
+        val callback = Runnable {
+            pendingTick = null
+            nextTickAt = Long.MAX_VALUE
             tick()
-        }, delay)
+        }
+        pendingTick = callback
+        nextTickAt = due
+        handler.postDelayed(callback, delay)
     }
+
+    private fun finishScan(message: String) {
+        // Preserve the actual top-to-bottom order observed during this scan.
+        // Accurate rescans can insert missing rows between existing orders.
+        val sorted = linkedMapOf<String, OrderRecord>()
+        for (key in scanOrder) known[key]?.let { sorted[key] = it }
+        for ((key, value) in known) if (key !in sorted) sorted[key] = value
+        known.clear()
+        known.putAll(sorted)
+        phase = Phase.IDLE
+        publish(message + " Полных карточек: " + known.size +
+            ". Неполных чтений: " + incompleteObservations + ".")
+    }
+
 
     private fun tick() {
         if (phase == Phase.IDLE) return
@@ -228,19 +254,17 @@ class OrderAccessibilityService : AccessibilityService() {
                 for (item in view.cards) {
                     if (item.record.complete) {
                         known[item.record.key] = item.record
+                        scanOrder.add(item.record.key)
                     }
                 }
                 if (unchanged >= 2 || steps >= 40) {
-                    phase = Phase.IDLE
-                    publish("Готово. Найдено полных карточек: " + known.size +
-                        ". Вернись в Помощник и выбери заказ.")
+                    finishScan("Быстрое сканирование завершено.")
                 } else if (scrollAndWait(view, backwards = false)) {
                     steps++
                     publish("Сканирую список: найдено " + known.size + " карточек…")
                     schedule(160)
                 } else {
-                    phase = Phase.IDLE
-                    publish("Сканирование завершено. Полных карточек: " + known.size)
+                    finishScan("Список дочитан.")
                 }
             }
             Phase.FIND -> {
@@ -424,7 +448,8 @@ class OrderAccessibilityService : AccessibilityService() {
 
     override fun onDestroy() {
         phase = Phase.IDLE
-        handler.removeCallbacksAndMessages(null)
+        pendingTick?.let { handler.removeCallbacks(it) }
+        pendingTick = null
         live = null
         publish("Служба отключена.")
         super.onDestroy()
