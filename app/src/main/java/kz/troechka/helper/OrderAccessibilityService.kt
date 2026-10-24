@@ -214,7 +214,7 @@ class OrderAccessibilityService : AccessibilityService() {
             val screen = getVisibleText(root).lowercase()
             val strongSuccess = listOf("заказ принят", "заказ назначен", "вы назначены",
                 "вы приняли заказ").any { screen.contains(it) }
-            if (strongSuccess) {
+            if (strongSuccess && !view.acceptTextVisible) {
                 phase = Phase.IDLE
                 acceptanceResult = "Троечка показала подтверждение принятия"
                 publish("Заказ принят по сообщению приложения. Проверь «Мои заказы».")
@@ -238,8 +238,12 @@ class OrderAccessibilityService : AccessibilityService() {
                 val texts = getVisibleText(root).lowercase().replace(Regex("""\s+"""), " ")
                 val pickup = target?.pickup?.lowercase()?.replace(Regex("""\s+"""), " ").orEmpty()
                 val destination = target?.destination?.lowercase()?.replace(Regex("""\s+"""), " ").orEmpty()
-                val priceMatches = target != null &&
-                    Regex("""\b""" + target.price.toString() + """[,.]00\b""").containsMatchIn(texts)
+                // Allow prices with grouping spaces, e.g. "1 160,00".
+                val digits = target?.price?.toString()?.map { Regex.escape(it.toString()) }
+                    ?.joinToString("""\s*""").orEmpty()
+                val priceMatches = target != null && Regex(
+                    """(?<!\d)""" + digits + """\s*[,.]\s*00(?!\d)"""
+                ).containsMatchIn(texts)
                 val addressesMatch = pickup.isNotEmpty() && destination.isNotEmpty() &&
                     texts.contains(pickup) && texts.contains(destination)
                 if (priceMatches && addressesMatch) {
