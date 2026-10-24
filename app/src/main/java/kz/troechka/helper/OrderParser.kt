@@ -151,7 +151,8 @@ object OrderParser {
         var depth = 0
         var best: Rect? = null
         while (ancestor != null && depth++ < 9) {
-            val box = Rect().also { ancestor.getBoundsInScreen(it) }
+            val current = ancestor ?: break
+            val box = Rect().also { current.getBoundsInScreen(it) }
             val height = box.height()
             if (height > priceRect.height() * 2 &&
                 height < window.height() * 0.72 &&
@@ -169,7 +170,7 @@ object OrderParser {
                     break
                 }
             }
-            ancestor = ancestor.parent
+            ancestor = current.parent
         }
         return best
     }
