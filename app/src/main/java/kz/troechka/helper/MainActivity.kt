@@ -1,6 +1,7 @@
 package kz.troechka.helper
 
 import android.app.Activity
+import android.app.AlertDialog
 import android.content.Intent
 import android.graphics.Color
 import android.graphics.Typeface
@@ -50,7 +51,7 @@ class MainActivity : Activity() {
         viewport.addView(root)
         root.addView(label("TROECHKA / DRIVER TOOLS", 12f, accent, true))
         root.addView(label("Помощник", 31f, Color.WHITE, true))
-        root.addView(label("Сканер списка · v0.3  /  ускоренный поиск", 13f, muted, false))
+        root.addView(label("Сканер списка · v0.4  /  свайп по подтверждению", 13f, muted, false))
         gap(root, 20)
 
         statusText = label("", 16f, Color.WHITE, false)
@@ -146,8 +147,10 @@ class MainActivity : Activity() {
             "Сначала запусти быстрое сканирование. Если некоторые заказы пропущены, " +
             "выбери «Точная допроверка»: она листает меньшими шагами и дополняет найденное. " +
             "Поиск карточки начинается с текущей позиции, без возврата в начало.\n\n" +
-            "Поиск открывает только карточку. Свайп «Принять заказ» НЕ выполняется. " +
-            "Адреса остаются в оперативной памяти телефона, доступа к интернету у Помощника нет.",
+            "«Найти и открыть» оставляет принятие тебе. «Найти и принять» после отдельного " +
+            "подтверждения делает один свайп, только если совпали цена и адреса. " +
+            "Если подтверждение принятия не найдено — проверь «Мои заказы». " +
+            "Адреса остаются в памяти телефона, доступа к интернету у Помощника нет.",
             13f, muted, false
         ))
         setContentView(viewport)
@@ -186,7 +189,8 @@ class MainActivity : Activity() {
             "Текстовых узлов: " + model.lastTextCount + "\n" +
             "Прокручиваемых областей: " + model.lastScrollableCount + "\n" +
             "Карточка: " + (model.lastDetailId ?: "не проверена") + "\n" +
-            "Ползунок: " + (if (model.sliderVisible) "обнаружен (НЕ задействован)" else "не подтверждён")
+            "Ползунок: " + (if (model.sliderVisible) "обнаружен" else "не подтверждён") + "\n" +
+            "Принятие: " + model.acceptanceResult
         renderResults()
     }
 
@@ -240,6 +244,39 @@ class MainActivity : Activity() {
                 }
             }
             box.addView(open)
+            gap(box, 6)
+            val acceptButton = Button(this).apply {
+                text = "Найти и ПРИНЯТЬ (реальный заказ)"
+                isAllCaps = false
+                setTextColor(Color.WHITE)
+                setBackgroundColor(Color.rgb(29, 115, 75))
+                setOnClickListener {
+                    AlertDialog.Builder(this@MainActivity)
+                        .setTitle("Принять настоящий заказ?")
+                        .setMessage(
+                            "Стоимость: " + order.price + " ₸\n" +
+                            "Подача: " + order.pickup + "\n" +
+                            "Назначение: " + order.destination + "\n\n" +
+                            "После подтверждения помощник найдёт заказ и выполнит " +
+                            "ОДИН свайп принятия, если карточка точно совпадёт. " +
+                            "Это реальное действие, не тест."
+                        )
+                        .setNegativeButton("Отмена", null)
+                        .setPositiveButton("Да, принять") { _, _ ->
+                            val service = OrderAccessibilityService.live
+                            if (service == null) {
+                                statusText.text = "Служба специальных возможностей отключена."
+                            } else if (service.findAndOpen(order.key, accept = true)) {
+                                launchDriver()
+                            } else {
+                                statusText.text = "Принятие не запущено: список ещё занят " +
+                                    "или выбранный заказ устарел."
+                            }
+                        }
+                        .show()
+                }
+            }
+            box.addView(acceptButton)
             card(results, box)
             gap(results, 10)
         }
